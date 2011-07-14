@@ -1,5 +1,20 @@
 #!/usr/bin/env python
-# vim: se et sw=4 sts=4 : 
+# btar.py - alternate extractor for Bacula volumes
+#
+# Copyright @ 2011 Marco Colombo <colombo@esi.it>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import sys
 import os
@@ -777,3 +792,6 @@ if __name__ == "__main__":
                 # send out_buf
                 out_sha1.update(out_buf)
                 out_buf = ""
+
+# vim: se et sw=4 sts=4 : 
+# END
