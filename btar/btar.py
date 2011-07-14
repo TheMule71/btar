@@ -3,7 +3,11 @@
 import sys
 import os
 import struct
-import hashlib
+try:
+    from hashlib import sha1, md5
+except ImportError:
+    from sha import sha as sha1
+    from md5 import md5
 import zlib
 
 try:
@@ -40,6 +44,7 @@ except ImportError, NameError:
         for c in data:
             crc = CRC_TABLE[(crc ^ ord(c)) & 0xff] ^ (crc >> 8)
         return crc ^ 0xffffffff
+    print "CRC32, using pure python function"
 
 # Dump the table to compare with the source of bacula
 #n = 0
@@ -414,7 +419,7 @@ class EOSLabel(SOSLabel):
             l = struct.calcsize("!IQIIIIII")
             self.JobFiles, self.JobBytes, self.StartBlock, self.EndBlock, \
             self.StartFile, self.EndFile, self.JobErrors, self.JobStatus \
-	    	= struct.unpack("!IQIIIIII", data[self.offset:self.offset+l])
+                = struct.unpack("!IQIIIIII", data[self.offset:self.offset+l])
         else:
             l = struct.calcsize("!IQIIIII")
             self.JobFiles, self.JobBytes, self.StartBlock, self.EndBlock, \
@@ -486,8 +491,8 @@ class Record(object):
         if self.partial:
             return
 
-	if self.header.FileIndex < 0:
-	    return
+        if self.header.FileIndex < 0:
+            return
 
     def __repr__(self):
         data_str = None
@@ -507,9 +512,9 @@ class Record(object):
         
         if self.label:
             ret += "\n"+str(self.label)
-	    return ret
+            return ret
         if self.header.Stream == STREAM_UNIX_ATTRIBUTES:
-	    self.attributes = Attributes.unpack_attributes_record(self.data)
+            self.attributes = Attributes.unpack_attributes_record(self.data)
             ret += "\n"+str(self.attributes)
         if self.header.Stream == STREAM_SHA1_DIGEST:
             ret += "\nData: " +  self.data.encode("hex")
@@ -584,7 +589,7 @@ class Block(object):
 
 class VolumeList(object):
     def __init__(self, volumes):
-	print "Volumes:", volumes
+        print "Volumes:", volumes
         self.volumes = volumes
         self.b = None
         self.offset = None
@@ -607,13 +612,13 @@ class VolumeList(object):
             if self.volumes[self.findex] == "-":
                 self.file = sys.stdin
             else:
-		print "Opening volume %d %s" % (self.findex, self.volumes[self.findex])
+                print "Opening volume %d %s" % (self.findex, self.volumes[self.findex])
                 self.file = open(self.volumes[self.findex])
         b = Block.from_file(self.file)
         if b:
             return b
         self.file.close()
-	self.file = None
+        self.file = None
         self.findex += 1
         return self.read_block()
 
@@ -643,13 +648,13 @@ class VolumeList(object):
 
         # partial record
         r2 = self.read_record()
-	if not r2:
-	    return None
-	
-	if r.header.Stream > 0:
-	    assert r2.header.Stream == -r.header.Stream
-	else:
-	    assert r2.header.Stream == r.header.Stream
+        if not r2:
+            return None
+        
+        if r.header.Stream > 0:
+            assert r2.header.Stream == -r.header.Stream
+        else:
+            assert r2.header.Stream == r.header.Stream
         r.data += r2.data
         assert not r2.partial
         assert len(r.data) == r.header.DataSize
@@ -664,65 +669,69 @@ if __name__ == "__main__":
     skip_fi = None
     offset = 0
     out_offset = 0
-    sha1 = hashlib.sha1()
-    md5 = hashlib.md5()
+    sha1_sig = sha1()
+    md5_sig = md5()
     for r in vl:
-	print r
+        print r
 
-	if (r.header.FileIndex == skip_fi):
-	    print "skipping..."
-	    continue
+        if r.header.FileIndex == SOS_LABEL:
+            skip_fi = None
+            fi = -1
 
-	if r.header.FileIndex < 0:
-	    continue
+        if (r.header.FileIndex == skip_fi):
+            print "skipping..."
+            continue
 
-	stream = r.header.Stream
+        if r.header.FileIndex < 0:
+            continue
 
-	if fi == -1 and stream < 0:
-	    skip_fi = r.header.FileIndex
-	    continue
+        stream = r.header.Stream
 
-	if (stream < 0):
-	    stream = - stream
+        if fi == -1 and stream < 0:
+            skip_fi = r.header.FileIndex
+            continue
 
-	if stream == STREAM_SHA1_DIGEST:
-	    if r.data != sha1.digest():
-		print "SHA1: FAILED %s / %s" % tuple(x.encode("hex") for x in (r.data, sha1.digest()))
-	    else:
-		print "SHA1: %s VERIFIED" % (r.data.encode("hex"))
-	    continue
-	if stream == STREAM_MD5_DIGEST:
-	    if r.data != md5.digest():
-		print "MD5: FAILED %s / %s" % tuple(x.encode("hex") for x in (r.data, md5.digest()))
-	    else:
-		print "MD5: %s VERIFIED" % (r.data.encode("hex"))
-	    continue
+        if (stream < 0):
+            stream = - stream
 
-	if r.header.FileIndex != fi:
-	    sha1 = hashlib.sha1()
-	    md5 = hashlib.md5()
-	    fi = r.header.FileIndex
-	    skip_fi = None
-	    out_offset = 0
+        if stream == STREAM_SHA1_DIGEST:
+            if r.data != sha1_sig.digest():
+                print "SHA1: FAILED %s / %s" % tuple(x.encode("hex") for x in (r.data, sha1_sig.digest()))
+            else:
+                print "SHA1: %s VERIFIED" % (r.data.encode("hex"))
+            continue
+        if stream == STREAM_MD5_DIGEST:
+            if r.data != md5_sig.digest():
+                print "MD5: FAILED %s / %s" % tuple(x.encode("hex") for x in (r.data, md5_sig.digest()))
+            else:
+                print "MD5: %s VERIFIED" % (r.data.encode("hex"))
+            continue
 
-	if stream not in (STREAM_SPARSE_GZIP_DATA, STREAM_GZIP_DATA, STREAM_SPARSE_DATA, STREAM_FILE_DATA):
-	    print "r.header.Stream = %s, ignoring data" % (stream_types[stream])
-	    continue
+        if r.header.FileIndex != fi:
+            sha1_sig = sha1()
+            md5_sig = md5()
+            fi = r.header.FileIndex
+            skip_fi = None
+            out_offset = 0
 
-	data = r.data
-	# XXX sparse
-	if stream in (STREAM_SPARSE_GZIP_DATA, STREAM_SPARSE_DATA):
-	    offset = struct.unpack("!Q", data[:struct.calcsize("!Q")])[0]
-	    #print "offset = %ld, out_offset = %ld" % (offset, out_offset)
-	    #assert offset == out_offset
-	    data = data[struct.calcsize("!Q"):]
+        if stream not in (STREAM_SPARSE_GZIP_DATA, STREAM_GZIP_DATA, STREAM_SPARSE_DATA, STREAM_FILE_DATA):
+            print "r.header.Stream = %s, ignoring data" % (stream_types[stream])
+            continue
 
-	if stream in (STREAM_SPARSE_GZIP_DATA, STREAM_GZIP_DATA):
-	    try:
-		data = zlib.decompress(data)
-	    except zlib.error, e:
-		print e
+        data = r.data
+        # XXX sparse
+        if stream in (STREAM_SPARSE_GZIP_DATA, STREAM_SPARSE_DATA):
+            offset = struct.unpack("!Q", data[:struct.calcsize("!Q")])[0]
+            #print "offset = %ld, out_offset = %ld" % (offset, out_offset)
+            #assert offset == out_offset
+            data = data[struct.calcsize("!Q"):]
 
-	out_offset += len(data)
-	sha1.update(data)
-	md5.update(data)
+        if stream in (STREAM_SPARSE_GZIP_DATA, STREAM_GZIP_DATA):
+            try:
+                data = zlib.decompress(data)
+            except zlib.error, e:
+                print e
+
+        out_offset += len(data)
+        sha1_sig.update(data)
+        md5_sig.update(data)
