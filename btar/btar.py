@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# vim: se et sw=4 sts=4 : 
 
 import sys
 import os
@@ -671,6 +672,8 @@ if __name__ == "__main__":
     out_offset = 0
     sha1_sig = sha1()
     md5_sig = md5()
+    out_sha1 = sha1()
+    out_buf = ""
     for r in vl:
         print r
 
@@ -713,6 +716,12 @@ if __name__ == "__main__":
             fi = r.header.FileIndex
             skip_fi = None
             out_offset = 0
+            if len(out_buf) > 0:
+                out_sha1.update(out_buf)
+                # send out_buf
+                out_buf = ""
+            print "oSHA1: %s" % (out_sha1.hexdigest(),)
+            out_sha1 = sha1()
 
         if stream not in (STREAM_SPARSE_GZIP_DATA, STREAM_GZIP_DATA, STREAM_SPARSE_DATA, STREAM_FILE_DATA):
             print "r.header.Stream = %s, ignoring data" % (stream_types[stream])
@@ -722,8 +731,27 @@ if __name__ == "__main__":
         # XXX sparse
         if stream in (STREAM_SPARSE_GZIP_DATA, STREAM_SPARSE_DATA):
             offset = struct.unpack("!Q", data[:struct.calcsize("!Q")])[0]
-            #print "offset = %ld, out_offset = %ld" % (offset, out_offset)
-            #assert offset == out_offset
+            print "offset = %ld, out_offset = %ld" % (offset, out_offset)
+            assert offset >= out_offset
+            zeros_len = offset - out_offset
+            while zeros_len > 0:
+                rest = 256*1024 - len(out_buf)
+                if zeros_len <= rest:
+                    zzz = "\0"*zeros_len
+                    zeros_len = 0
+                else:
+                    zzz = "\0"*rest
+                    zeros_len -= rest
+                out_buf += zzz
+                #sha1_sig.update(zzz)
+                #md5_sig.update(zzz)
+                out_offset += len(zzz)
+                print "len(zzz) = %ld, out_offset = %ld" % (len(zzz), out_offset)
+                rest = 256*1024 - len(out_buf)
+                if rest == 0:
+                    out_sha1.update(out_buf)
+                    # send out_buf
+                    out_buf = ""
             data = data[struct.calcsize("!Q"):]
 
         if stream in (STREAM_SPARSE_GZIP_DATA, STREAM_GZIP_DATA):
@@ -731,7 +759,21 @@ if __name__ == "__main__":
                 data = zlib.decompress(data)
             except zlib.error, e:
                 print e
-
-        out_offset += len(data)
+        
         sha1_sig.update(data)
         md5_sig.update(data)
+        out_offset += len(data)
+
+        while len(data):
+            rest = 256*1024 - len(out_buf)
+            if len(data) <= rest:
+                out_buf += data
+                data = ""
+            else:
+                out_buf += data[:rest]
+                data = data[rest:]
+            rest = 256*1024 - len(out_buf)
+            if rest == 0:
+                # send out_buf
+                out_sha1.update(out_buf)
+                out_buf = ""
