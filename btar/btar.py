@@ -3,6 +3,7 @@
 import sys
 import os
 import struct
+import hashlib
 import zlib
 
 try:
@@ -122,7 +123,7 @@ for l in _foo.split("\n"):
     stream_types[int(k)] = v
     # NOTE Pollute the global space with the definitions
     globals()[v] = int(k)
-del _foo
+del _foo, v, k
 
 def stream_to_str(n):
     cont = ""
@@ -180,7 +181,7 @@ for l in _foo.split("\n"):
         file_types[int(k)] = v
     # NOTE Pollute the global space with the definitions
     globals()[v] = int(k)
-del _foo
+del _foo, v, k
 
 
 BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -523,15 +524,6 @@ class Record(object):
             return struct.calcsize(BB02_RECORD_H_FMT)
         return struct.calcsize(BB02_RECORD_H_FMT) + len(self.data)
 
-    @classmethod
-    def from_data(cls, data, previous):
-        r = cls(data)
-        if previous:
-            previous.data += data
-            previous.partial = r.partial
-            return previous
-        return r
-
     @staticmethod
     def parse_header(rec_bin):
         class record_header(list):
@@ -565,23 +557,6 @@ class Block(object):
     def __str__(self):
         return "Block: cs=0x%08x, bs=%d, bn=%d, ID=%s, VSID=%d, VSTM=%d" % self.header
 
-    def __iter__(self):
-        offset = 0
-        r = None
-        while offset < len(self.data):
-            if r and not r.partial:
-                r = None
-            r = Record.from_data(self.data[offset:], r)
-            if not r:
-                print "Block: garbage data at the end???"
-                break
-            l = len(r)
-            if l == 0:
-                print "Block: empty record at the end???"
-                break
-            offset += l
-            yield r
-
     @classmethod
     def from_file(cls, f, offset=0):
         if offset:
@@ -606,44 +581,148 @@ class Block(object):
     def parse_header(header_bin):
         return struct.unpack(BB02_HEADER_FMT, header_bin)
 
-class Volume(object):
-    def __init__(self, name):
-        self.name = name
-        self.open("r")
 
-    def open(self, mode="r"):
-        # XXX ignore mode, only "r" supported
-        #self.parts = self
-        if self.name == "-":
-            self.file = sys.stdin
-        else:
-            self.file = open(self.name, "r")
-
-    def read_block(self):
-        return Block.from_file(self.file)
+class VolumeList(object):
+    def __init__(self, volumes):
+	print "Volumes:", volumes
+        self.volumes = volumes
+        self.b = None
+        self.offset = None
+        self.findex = 0
+        self.file = None
 
     def __iter__(self):
         return self
 
     def next(self):
-        b = self.read_block()
-        if not b:
+        r = self.read_record()
+        if not r:
             raise StopIteration
-        return b
+        return r
 
-    @staticmethod
-    def parse_label(label_bin):
-        pass
+    def read_block(self):
+        if self.findex >= len(self.volumes):
+            return None
+        if not self.file:
+            if self.volumes[self.findex] == "-":
+                self.file = sys.stdin
+            else:
+		print "Opening volume %d %s" % (self.findex, self.volumes[self.findex])
+                self.file = open(self.volumes[self.findex])
+        b = Block.from_file(self.file)
+        if b:
+            return b
+        self.file.close()
+	self.file = None
+        self.findex += 1
+        return self.read_block()
+
+    def read_record(self):
+        if self.b and 0 < (len(self.b.data) - self.offset) < struct.calcsize(BB02_RECORD_H_FMT):
+            # sanity check, this should never happen!
+            print "WARNING: garbage at the end of block: len(b.data) = %d, offset = %d" % (len(self.b.data), self.offset)
+            self.offset = len(self.b.data)
+        
+        if not self.b or len(self.b.data) == self.offset:
+            # no block or end of block
+            self.b = self.read_block()
+            self.offset = 0
+        if not self.b:
+            return None
+
+        r = Record(self.b.data[self.offset:])
+        self.offset += len(r)
+
+        if r.header.FileIndex == VOL_LABEL:
+            print r
+            self.vollabel = r.label
+            return self.read_record()
+
+        if not r.partial:
+            return r
+
+        # partial record
+        r2 = self.read_record()
+	if not r2:
+	    return None
+	
+	if r.header.Stream > 0:
+	    assert r2.header.Stream == -r.header.Stream
+	else:
+	    assert r2.header.Stream == r.header.Stream
+        r.data += r2.data
+        assert not r2.partial
+        assert len(r.data) == r.header.DataSize
+        r.partial = False
+        return r
+
 
 if __name__ == "__main__":
-    v = Volume(sys.argv[1])
-    #print repr(l.data)
-    #print Record.parse_header(l.data[:struct.calcsize(BB02_RECORD_H_FMT)])
-    #v.parse_label(l.data)
-    for b in v:
-        print b
-        for r in b:
-            if r.partial:
-                continue
-            print r
-            print
+    vl = VolumeList(sys.argv[1:])
+
+    fi = -1
+    skip_fi = None
+    offset = 0
+    out_offset = 0
+    sha1 = hashlib.sha1()
+    md5 = hashlib.md5()
+    for r in vl:
+	print r
+
+	if (r.header.FileIndex == skip_fi):
+	    print "skipping..."
+	    continue
+
+	if r.header.FileIndex < 0:
+	    continue
+
+	stream = r.header.Stream
+
+	if fi == -1 and stream < 0:
+	    skip_fi = r.header.FileIndex
+	    continue
+
+	if (stream < 0):
+	    stream = - stream
+
+	if stream == STREAM_SHA1_DIGEST:
+	    if r.data != sha1.digest():
+		print "SHA1: FAILED %s / %s" % tuple(x.encode("hex") for x in (r.data, sha1.digest()))
+	    else:
+		print "SHA1: %s VERIFIED" % (r.data.encode("hex"))
+	    continue
+	if stream == STREAM_MD5_DIGEST:
+	    if r.data != md5.digest():
+		print "MD5: FAILED %s / %s" % tuple(x.encode("hex") for x in (r.data, md5.digest()))
+	    else:
+		print "MD5: %s VERIFIED" % (r.data.encode("hex"))
+	    continue
+
+	if r.header.FileIndex != fi:
+	    sha1 = hashlib.sha1()
+	    md5 = hashlib.md5()
+	    fi = r.header.FileIndex
+	    skip_fi = None
+	    out_offset = 0
+
+	if stream not in (STREAM_SPARSE_GZIP_DATA, STREAM_GZIP_DATA, STREAM_SPARSE_DATA, STREAM_FILE_DATA):
+	    print "r.header.Stream = %s, ignoring data" % (stream_types[stream])
+	    continue
+
+	data = r.data
+	# XXX sparse
+	if stream in (STREAM_SPARSE_GZIP_DATA, STREAM_SPARSE_DATA):
+	    offset = struct.unpack("!Q", data[:struct.calcsize("!Q")])[0]
+	    #print "offset = %ld, out_offset = %ld" % (offset, out_offset)
+	    #assert offset == out_offset
+	    data = data[struct.calcsize("!Q"):]
+
+	if stream in (STREAM_SPARSE_GZIP_DATA, STREAM_GZIP_DATA):
+	    try:
+		data = zlib.decompress(data)
+	    except zlib.error, e:
+		print e
+
+	out_offset += len(data)
+	sha1.update(data)
+	md5.update(data)
