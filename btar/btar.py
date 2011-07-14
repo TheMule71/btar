@@ -406,23 +406,25 @@ class SOSLabel(object):
 
 class EOSLabel(SOSLabel):
     def __init__(self, data):
-        super(SOSLabel, self).__init__(data)
+        super(EOSLabel, self).__init__(data)
+        self.JobFiles = self.JobBytes = self.StartBlock = self.EndBlock = \
+        self.StartFile = self.EndFile = self.JobErrors = self.JobStatus = 0
         if self.VerNum >= 11:
             l = struct.calcsize("!IQIIIIII")
-            self.JobFiles, self.JobBytes, self.StartBlock, self.EndBlock,
-            self.StartFile, self.EndFile, self.JobErrors, self.JosStatus \
-                = struct.unpack("!IQIIIIII", data[offset:offset+l])
+            self.JobFiles, self.JobBytes, self.StartBlock, self.EndBlock, \
+            self.StartFile, self.EndFile, self.JobErrors, self.JobStatus \
+	    	= struct.unpack("!IQIIIIII", data[self.offset:self.offset+l])
         else:
             l = struct.calcsize("!IQIIIII")
-            self.JobFiles, self.JobBytes, self.StartBlock, self.EndBlock,
+            self.JobFiles, self.JobBytes, self.StartBlock, self.EndBlock, \
             self.StartFile, self.EndFile, self.JobErrors \
-                = struct.unpack("!IQIIIII", data[offset:offset+l])
+                = struct.unpack("!IQIIIII", data[self.offset:self.offset+l])
             JS_Terminated = "T"
             self.JobStatus = JS_Terminated
         self.offset += l
 
     def __str__(self):
-        sos_str = super(SOSLabel, self).__str__()
+        sos_str = super(EOSLabel, self).__str__()
         return sos_str + """
  JobFiles: %s
  JobBytes: %s
@@ -483,11 +485,8 @@ class Record(object):
         if self.partial:
             return
 
-        if self.header.Stream < 0:
-            self.header.Stream = -self.header.Stream
-
-        if self.header.Stream == STREAM_UNIX_ATTRIBUTES:
-            self.attributes = Attributes.unpack_attributes_record(self.data)
+	if self.header.FileIndex < 0:
+	    return
 
     def __repr__(self):
         data_str = None
@@ -507,9 +506,13 @@ class Record(object):
         
         if self.label:
             ret += "\n"+str(self.label)
-        if self.attributes:
+	    return ret
+        if self.header.Stream == STREAM_UNIX_ATTRIBUTES:
+	    self.attributes = Attributes.unpack_attributes_record(self.data)
             ret += "\n"+str(self.attributes)
-        if (self.header[1] == STREAM_SHA1_DIGEST):
+        if self.header.Stream == STREAM_SHA1_DIGEST:
+            ret += "\nData: " +  self.data.encode("hex")
+        if self.header.Stream == STREAM_MD5_DIGEST:
             ret += "\nData: " +  self.data.encode("hex")
         return ret
         
@@ -611,7 +614,10 @@ class Volume(object):
     def open(self, mode="r"):
         # XXX ignore mode, only "r" supported
         #self.parts = self
-        self.file = open(self.name, "r")
+        if self.name == "-":
+            self.file = sys.stdin
+        else:
+            self.file = open(self.name, "r")
 
     def read_block(self):
         return Block.from_file(self.file)
